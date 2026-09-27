@@ -1,0 +1,6 @@
+[
+  "tests/test_vault_scan.py::test_legacy_single_note_is_retained_as_to_learn",
+  "tests/test_vault_scan.py::test_opportunity_cost_is_completed_only_with_explicit_status",
+  "tests/test_vault_scan.py::test_scan_vault_supports_both_subjects",
+  "tests/test_vault_scan.py::test_sunk_cost_is_in_progress_even_when_after_version_has_text"
+]
