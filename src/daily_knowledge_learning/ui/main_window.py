@@ -1,0 +1,53 @@
+"""Main window: sidebar on the left, switchable content on the right."""
+
+from __future__ import annotations
+
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QMainWindow,
+    QSplitter,
+    QWidget,
+)
+from PySide6.QtCore import Qt
+
+from .pages import ContentArea
+from .sidebar import Sidebar
+
+WINDOW_TITLE = "每日知识点学习"
+
+
+class MainWindow(QMainWindow):
+    """Top-level application window for the UI skeleton."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(WINDOW_TITLE)
+        self.resize(1024, 680)
+        self.setMinimumSize(760, 480)
+
+        central = QWidget(self)
+        central.setObjectName("central")
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.sidebar = Sidebar()
+        self.content = ContentArea()
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("mainSplitter")
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self.sidebar)
+        splitter.addWidget(self.content)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([180, 844])
+
+        layout.addWidget(splitter)
+        self.setCentralWidget(central)
+
+        self.sidebar.entry_selected.connect(self._on_nav_changed)
+        self._on_nav_changed(self.sidebar.current_key())
+
+    def _on_nav_changed(self, key: str) -> None:
+        self.content.show_key(key)
