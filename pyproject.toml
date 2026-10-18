@@ -8,10 +8,14 @@ version = "0.1.0"
 description = "A learning project for building a safe Obsidian-backed study assistant."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "keyring>=25.6",
+  "ruamel.yaml>=0.18.10",
+]
 
 [project.scripts]
 daily-learning = "daily_knowledge_learning.cli:main"
+daily-learning-next = "daily_knowledge_learning.next_cli:main"
 
 [dependency-groups]
 dev = [
