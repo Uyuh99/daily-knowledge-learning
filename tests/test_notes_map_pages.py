@@ -67,6 +67,23 @@ def test_three_versions_render_and_missing_version_has_placeholder(app: QApplica
     assert "此版本尚未创建" in page.readers[1].toPlainText()
 
 
+def test_readers_strip_frontmatter_and_narrow_mode_selects_one_version(app: QApplication, vault: Path) -> None:
+    page = NotesPage(vault)
+    page.resize(760, 480)
+    page.show()
+    app.processEvents()
+    row = next(i for i, record in enumerate(page._visible) if record.topic == "机会成本")
+    path = page._visible[row].path / "01-交流前版.md"
+    path.write_text("---\ndate: 2026-09-22\nstatus: 待学习\n---\n\n# 正文标题\n\n正文内容", encoding="utf-8")
+    page.topic_list.setCurrentRow(row)
+    app.processEvents()
+    assert "date:" not in page.readers[0].toPlainText()
+    assert "正文内容" in page.readers[0].toPlainText()
+    assert page.version_picker.isVisible()
+    assert sum(not column.isHidden() for column in page.reader_columns) == 1
+    page.close()
+
+
 def test_map_displays_modules_topics_and_prerequisite(app: QApplication, vault: Path) -> None:
     (vault / "经济学" / "经济学学习路线与已学索引.md").write_text(
         "### 模块 A｜经济学基础\n\n"
