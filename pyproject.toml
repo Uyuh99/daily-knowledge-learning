@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 daily-learning = "daily_knowledge_learning.cli:main"
+daily-learning-next = "daily_knowledge_learning.next_cli:main"
 
 [dependency-groups]
 dev = [
