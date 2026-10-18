@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
   "keyring>=25.6",
+  "pyside6>=6.8",
   "ruamel.yaml>=0.18.10",
 ]
 
@@ -20,6 +21,7 @@ daily-learning-next = "daily_knowledge_learning.next_cli:main"
 [dependency-groups]
 dev = [
   "pytest>=8.3",
+  "pyinstaller>=6.11",
 ]
 
 [tool.hatch.build.targets.wheel]

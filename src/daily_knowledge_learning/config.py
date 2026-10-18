@@ -17,7 +17,7 @@ class AppConfig:
     vault_path: Path = Path("")
     ai_provider: str = "mock"
     model: str = ""
-    auto_save_interval: int = 60
+    auto_save_interval: int = 30
 
 
 def config_file_path() -> Path:
