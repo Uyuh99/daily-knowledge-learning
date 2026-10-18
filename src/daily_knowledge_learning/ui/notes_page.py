@@ -71,6 +71,7 @@ class NotesPage(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
+        self.records = sorted(scan_vault(self.vault_root), key=lambda row: row.date, reverse=True)
         subject = self.subject_filter.currentText()
         status = self.status_filter.currentText()
         self._visible = [

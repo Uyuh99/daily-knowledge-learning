@@ -36,10 +36,10 @@ def test_window_title_is_chinese(app: QApplication) -> None:
     window.close()
 
 
-def test_sidebar_has_four_required_entries(app: QApplication) -> None:
+def test_sidebar_has_five_required_entries(app: QApplication) -> None:
     window = create_window()
     titles = [entry.title for entry in NAV_ENTRIES]
-    assert titles == ["首页", "今日学习", "学习地图", "设置"]
+    assert titles == ["首页", "今日学习", "笔记查看", "学习地图", "设置"]
     assert window.sidebar.current_key() == "home"
     window.close()
 

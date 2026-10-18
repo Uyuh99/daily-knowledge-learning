@@ -43,6 +43,7 @@ class MapPage(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
+        self.records = scan_vault(self.vault_root)
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget():

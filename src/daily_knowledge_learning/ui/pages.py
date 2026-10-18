@@ -3,18 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
 from PySide6.QtWidgets import (QComboBox, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton,
     QProgressBar, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
     QVBoxLayout, QWidget, QFileDialog)
 
+from ..ai_provider import get_provider
 from ..config import AppConfig, load_config, save_config, set_api_key
 from ..file_writer import update_note
 from ..models import TopicStatus
 from ..note_manager import TopicNotePaths, create_topic_notes
+from ..study_service import StudyServiceError, generate_ai_reference, review_pre_learning, start_session
 from ..topic_selector import build_study_prompt, select_next_topic
 from ..vault_scan import scan_vault
+from .map_page import MapPage
+from .notes_page import NotesPage
 
 VERSION_NAMES = ("01-交流前版.md", "02-交流后版.md", "03-AI参考版.md")
 
@@ -83,11 +87,49 @@ class HomePage(QWidget):
         if not done: self.recent.addItem("还没有完成的知识点。")
 
 
+class _AIServiceAdapter:
+    """Adapt the provider's chat API to study_service's generate protocol."""
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def is_available(self) -> bool:
+        return self.provider.is_available()
+
+    def generate(self, messages: list[dict[str, str]]) -> str:
+        return self.provider.chat(messages)
+
+
+class _WorkerSignals(QObject):
+    completed = Signal(object, str, bool)
+
+
+class _AIWorker(QRunnable):
+    def __init__(self, action, session, provider):
+        super().__init__()
+        self.signals = _WorkerSignals()
+        self.action = action
+        self.session = session
+        self.provider = _AIServiceAdapter(provider)
+
+    def run(self):
+        try:
+            self.signals.completed.emit(self, self.action(self.session, self.provider), True)
+        except Exception as error:
+            self.signals.completed.emit(self, str(error), False)
+
+
 class TodayPage(QWidget):
     topic_ready = Signal(Path)
+    reference_ready = Signal(Path)
+    ai_completed = Signal(str, bool)
 
-    def __init__(self, vault_path: Path | None, parent=None):
-        super().__init__(parent); self.vault_path = vault_path
+    def __init__(self, vault_path: Path | None, config_path: Path | None = None, parent=None):
+        super().__init__(parent); self.vault_path = vault_path; self.config_path = config_path
+        self._thread_pool = QThreadPool(self)
+        self._workers = set()
+        self._generated_references = set()
+        self.session = None
         self.subject = QComboBox(); self.subject.addItems(["心理学", "经济学"])
         self.fields = {key: QLabel() for key in ("topic", "module", "reason", "relationship", "question", "keywords", "schedule")}
         for w in self.fields.values(): w.setWordWrap(True)
@@ -95,7 +137,18 @@ class TodayPage(QWidget):
         form = QFormLayout()
         labels = {"topic":"主题", "module":"模块", "reason":"选择理由", "relationship":"与上个知识点", "question":"核心问题", "keywords":"搜索关键词", "schedule":"时间安排"}
         for key, label in labels.items(): form.addRow(label, self.fields[key])
-        layout = QVBoxLayout(self); layout.addWidget(QLabel("今日学习")); layout.addWidget(self.subject, 0, Qt.AlignmentFlag.AlignLeft); layout.addLayout(form); layout.addWidget(self.start, 0, Qt.AlignmentFlag.AlignLeft); layout.addStretch()
+        self.review_button = QPushButton("检查交流前版")
+        self.reference_button = QPushButton("生成 AI 参考版")
+        self.review_button.clicked.connect(self.review_pre_learning)
+        self.reference_button.clicked.connect(self.generate_reference)
+        self.ai_status = QLabel()
+        self.ai_status.setWordWrap(True)
+        self.ai_feedback = QTextEdit()
+        self.ai_feedback.setReadOnly(True)
+        self.ai_feedback.setPlaceholderText("AI 反馈会显示在这里，不会自动写入笔记")
+        layout = QVBoxLayout(self); layout.addWidget(QLabel("今日学习")); layout.addWidget(self.subject, 0, Qt.AlignmentFlag.AlignLeft); layout.addLayout(form); layout.addWidget(self.start, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(QLabel("AI 交流")); layout.addWidget(self.ai_status); layout.addWidget(self.ai_feedback, 1)
+        actions = QHBoxLayout(); actions.addWidget(self.review_button); actions.addWidget(self.reference_button); actions.addStretch(); layout.addLayout(actions)
         self.subject.currentTextChanged.connect(self.refresh); self.refresh()
 
     def refresh(self) -> None:
@@ -115,12 +168,74 @@ class TodayPage(QWidget):
         topic = self.fields["topic"].text()
         if self.vault_path is None or not topic or topic.startswith("暂无"): return
         subject = _subject_identifier(self.vault_path, self.subject.currentIndex(), self.subject.currentText())
-        try: paths = create_topic_notes(self.vault_path, subject, topic)
-        except FileExistsError:
-            folder = next(self.vault_path.rglob(f"*-{topic}"), None)
-            if folder is None: return
-            paths = TopicNotePaths(folder, *(folder / n for n in VERSION_NAMES))
-        self.topic_ready.emit(paths.folder)
+        try:
+            self.session = start_session(self.vault_path, subject)
+        except StudyServiceError as error:
+            self.ai_status.setText(f"无法开始学习：{error}")
+            return
+        self.topic_ready.emit(self.session.note_paths.folder)
+
+    def _run_ai(self, action, *, generated_reference: bool = False) -> None:
+        if self.session is None:
+            self.ai_status.setText("请先开始学习以创建学习会话。")
+            return
+        try:
+            config = _safe_config(self.config_path)
+            provider = get_provider(config.ai_provider, model=config.model or None)
+            if not provider.is_available():
+                self.ai_status.setText("尚未配置 AI 服务，可在设置中配置；你仍然可以继续编辑和保存笔记")
+                return
+        except Exception as error:
+            self.ai_status.setText(f"AI 服务不可用：{error}")
+            return
+        self.review_button.setEnabled(False)
+        self.reference_button.setEnabled(False)
+        self.ai_status.setText("正在生成 AI 内容…")
+        worker = _AIWorker(action, self.session, provider)
+        worker.signals.completed.connect(self._ai_finished)
+        self._workers.add(worker)
+        if generated_reference:
+            self._generated_references.add(worker)
+        self._thread_pool.start(worker)
+
+    @Slot(object, str, bool)
+    def _ai_finished(self, worker, text: str, ok: bool) -> None:
+        self._workers.discard(worker)
+        generated_reference = worker in self._generated_references
+        self._generated_references.discard(worker)
+        self.review_button.setEnabled(True)
+        self.reference_button.setEnabled(True)
+        self.ai_completed.emit(text, ok)
+        if not ok:
+            self.ai_status.setText(f"AI 操作失败：{text}")
+            return
+        if generated_reference:
+            self.ai_status.setText("AI 参考版已生成并写入笔记。")
+            self.reference_ready.emit(self.session.note_paths.ai_reference)
+        else:
+            self.ai_status.setText("AI 已完成反馈，笔记未被修改。")
+            self.ai_feedback.setPlainText(text)
+
+    def review_pre_learning(self) -> None:
+        self._run_ai(review_pre_learning)
+
+    def generate_reference(self) -> None:
+        if self.session is None:
+            self.ai_status.setText("请先开始学习以创建学习会话。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "生成 AI 参考版",
+            "这会调用 AI 生成参考版并写入 03-AI参考版.md",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._run_ai(
+            lambda session, provider: generate_ai_reference(session, provider, user_confirmed=True),
+            generated_reference=True,
+        )
 
 
 class MarkdownEditor(QWidget):
@@ -155,6 +270,17 @@ class MarkdownEditor(QWidget):
                 except (OSError, UnicodeError): text = ""
                 self.editors[i].setPlainText(text); self.previews[i].setMarkdown(text)
             self._dirty.clear(); self.status.setText("已加载")
+        finally: self._loading = False
+
+    def load_reference_file(self, path: Path) -> None:
+        if self.folder != Path(path).parent or 2 in self._dirty:
+            return
+        self.paths[2] = Path(path)
+        try: text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError): return
+        self._loading = True
+        try:
+            self.editors[2].setPlainText(text); self.previews[2].setMarkdown(text)
         finally: self._loading = False
 
     def _mark_dirty(self, index: int) -> None:
@@ -207,10 +333,14 @@ class ContentArea(QStackedWidget):
     def __init__(self, vault_path: Path | None = None, config_path: Path | None = None, parent=None):
         super().__init__(parent); self._index = {}; config = _safe_config(config_path)
         if vault_path is not None: config = AppConfig(vault_path, config.ai_provider, config.model, config.auto_save_interval)
-        root = config.vault_path if str(config.vault_path) else None; self.home = HomePage(root, lambda: self.show_key("today")); self.today = TodayPage(root); self.editor = MarkdownEditor(config); self.settings = SettingsPage(config, config_path)
-        for key, page in (("home", self.home), ("today", self.today), ("map", self.editor), ("settings", self.settings)): self._index[key] = self.addWidget(page)
-        self.today.topic_ready.connect(self.editor.load_topic); self.settings.config_changed.connect(self._vault_changed)
+        root = config.vault_path if str(config.vault_path) else None; self.home = HomePage(root, lambda: self.show_key("today")); self.today = TodayPage(root, config_path); self.editor = MarkdownEditor(config); self.notes = NotesPage(root or Path(".")); self.map = MapPage(root or Path(".")); self.settings = SettingsPage(config, config_path)
+        for key, page in (("home", self.home), ("today", self.today), ("notes", self.notes), ("map", self.map), ("settings", self.settings), ("editor", self.editor)): self._index[key] = self.addWidget(page)
+        self.today.topic_ready.connect(self._open_topic); self.today.reference_ready.connect(self.editor.load_reference_file); self.settings.config_changed.connect(self._vault_changed)
+    def _open_topic(self, folder: Path) -> None:
+        self.editor.load_topic(folder)
+        self.show_key("editor")
     def _vault_changed(self, path: Path) -> None:
-        self.home.vault_path = path; self.today.vault_path = path; self.editor.config = AppConfig(path, self.editor.config.ai_provider, self.editor.config.model, self.editor.config.auto_save_interval); self.home.refresh(); self.today.refresh()
+        self.home.vault_path = path; self.today.vault_path = path; self.editor.config = AppConfig(path, self.editor.config.ai_provider, self.editor.config.model, self.editor.config.auto_save_interval)
+        self.notes.vault_root = path; self.map.vault_root = path; self.home.refresh(); self.today.refresh(); self.notes.refresh(); self.map.refresh()
     def show_key(self, key: str) -> None:
         if key in self._index: self.setCurrentIndex(self._index[key])

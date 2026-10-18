@@ -8,7 +8,13 @@ class NavEntry:
     key: str
     title: str
 
-NAV_ENTRIES = (NavEntry("home", "首页"), NavEntry("today", "今日学习"), NavEntry("map", "学习地图"), NavEntry("settings", "设置"))
+NAV_ENTRIES = (
+    NavEntry("home", "首页"),
+    NavEntry("today", "今日学习"),
+    NavEntry("notes", "笔记查看"),
+    NavEntry("map", "学习地图"),
+    NavEntry("settings", "设置"),
+)
 
 class Sidebar(QWidget):
     entry_selected = Signal(str)
