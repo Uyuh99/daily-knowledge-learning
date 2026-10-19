@@ -91,6 +91,7 @@ def test_ai_review_runs_in_worker_and_does_not_write_notes(app, vault, tmp_path,
     QTimer.singleShot(5000, loop.quit)
     page.review_pre_learning()
     loop.exec()
+    assert page._thread_pool.waitForDone(5000), (page.ai_status.text(), len(page._workers))
     assert not page._thread_pool.activeThreadCount(), (page.ai_status.text(), len(page._workers))
     app.processEvents()
     page._thread_pool.waitForDone(5000)
