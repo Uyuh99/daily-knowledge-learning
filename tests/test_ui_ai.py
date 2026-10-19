@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from daily_knowledge_learning.config import AppConfig, save_config
@@ -43,6 +44,9 @@ class Provider:
 
     def chat(self, messages):
         self.calls += 1
+        delay = getattr(self, "delay", 0)
+        if delay:
+            time.sleep(delay)
         return self.response
 
 
@@ -65,6 +69,13 @@ def _session(vault):
     return session
 
 
+def _wait_for_signal(spy, timeout_ms=10000):
+    deadline = time.monotonic() + timeout_ms / 1000
+    while not spy.count() and time.monotonic() < deadline:
+        spy.wait(min(100, max(1, round((deadline - time.monotonic()) * 1000))))
+    return bool(spy.count())
+
+
 def test_navigation_contains_notes_and_real_map(app, vault):
     window = MainWindow(vault)
     assert [entry.title for entry in NAV_ENTRIES] == ["首页", "今日学习", "笔记查看", "学习地图", "设置"]
@@ -78,26 +89,28 @@ def test_navigation_contains_notes_and_real_map(app, vault):
     window.close()
 
 
-def test_ai_review_runs_in_worker_and_does_not_write_notes(app, vault, tmp_path, monkeypatch):
+@pytest.mark.parametrize("provider_delay", [0.2, 0.5])
+def test_ai_review_runs_in_worker_and_does_not_write_notes(app, vault, tmp_path, monkeypatch, provider_delay):
     config_path = tmp_path / "config.json"
     save_config(AppConfig(vault, "mock", "", 30), config_path)
     page = TodayPage(vault, config_path)
     page.session = _session(vault)
     provider = Provider()
+    provider.delay = provider_delay
     monkeypatch.setattr("daily_knowledge_learning.ui.pages.get_provider", lambda *args, **kwargs: provider)
     before = {path: path.read_bytes() for path in page.session.note_paths.folder.glob("*.md")}
-    loop = QEventLoop()
-    page.ai_completed.connect(lambda *_: loop.quit())
-    QTimer.singleShot(5000, loop.quit)
-    page.review_pre_learning()
-    loop.exec()
-    assert not page._thread_pool.activeThreadCount(), (page.ai_status.text(), len(page._workers))
-    app.processEvents()
-    page._thread_pool.waitForDone(5000)
-    app.processEvents()
-    assert page.ai_feedback.toPlainText() == "反馈：请补充证据"
-    assert {path: path.read_bytes() for path in page.session.note_paths.folder.glob("*.md")} == before
-    page.close()
+    spy = QSignalSpy(page.ai_completed)
+    try:
+        page.review_pre_learning()
+        assert _wait_for_signal(spy), f"AI completion signal was not emitted within 10 seconds (status={page.ai_status.text()!r}, workers={len(page._workers)}, spy={spy.size()})"
+        assert page._thread_pool.waitForDone(5000), "AI worker did not exit within 5 seconds"
+        app.processEvents()
+        assert not page._thread_pool.activeThreadCount(), (page.ai_status.text(), len(page._workers))
+        assert page.ai_feedback.toPlainText() == "反馈：请补充证据"
+        assert {path: path.read_bytes() for path in page.session.note_paths.folder.glob("*.md")} == before
+    finally:
+        page._thread_pool.waitForDone(5000)
+        page.close()
 
 
 def test_unavailable_ai_shows_editable_fallback(app, vault, tmp_path, monkeypatch):
@@ -108,6 +121,7 @@ def test_unavailable_ai_shows_editable_fallback(app, vault, tmp_path, monkeypatc
     monkeypatch.setattr("daily_knowledge_learning.ui.pages.get_provider", lambda *args, **kwargs: Provider(available=False))
     page.review_pre_learning()
     assert "尚未配置 AI 服务" in page.ai_status.text()
+    page._thread_pool.waitForDone(5000)
     page.close()
 
 
@@ -134,12 +148,10 @@ def test_confirmed_reference_is_written_with_ai_notice(app, vault, tmp_path, mon
     provider = Provider(response=REFERENCE)
     monkeypatch.setattr("daily_knowledge_learning.ui.pages.get_provider", lambda *args, **kwargs: provider)
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
-    loop = QEventLoop()
-    page.ai_completed.connect(lambda *_: loop.quit())
-    QTimer.singleShot(5000, loop.quit)
+    spy = QSignalSpy(page.ai_completed)
     page.generate_reference()
-    loop.exec()
-    page._thread_pool.waitForDone(5000)
+    assert _wait_for_signal(spy), "AI reference completion signal was not emitted within 10 seconds"
+    assert page._thread_pool.waitForDone(5000), "AI worker did not exit within 5 seconds"
     assert not page._thread_pool.activeThreadCount(), (page.ai_status.text(), len(page._workers))
     content = page.session.note_paths.ai_reference.read_text(encoding="utf-8")
     assert _AI_REFERENCE_NOTICE in content
