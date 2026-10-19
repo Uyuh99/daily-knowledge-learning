@@ -4,9 +4,10 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtWidgets import (QComboBox, QFormLayout, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton,
-    QProgressBar, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QProgressBar,
+    QScrollArea, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
     QVBoxLayout, QWidget, QFileDialog)
 
 from ..ai_provider import get_provider
@@ -19,6 +20,9 @@ from ..topic_selector import build_study_prompt, select_next_topic
 from ..vault_scan import scan_vault
 from .map_page import MapPage
 from .notes_page import NotesPage
+from . import theme
+from .widgets import (Card, EmptyState, PageHeader, SectionTitle, field_label,
+    meta_label, primary_button, secondary_button, set_reading_metrics)
 
 VERSION_NAMES = ("01-交流前版.md", "02-交流后版.md", "03-AI参考版.md")
 
@@ -53,38 +57,102 @@ def _safe_config(path: Path | None = None) -> AppConfig:
 
 
 class HomePage(QWidget):
-    def __init__(self, vault_path: Path | None, open_today, parent=None):
+    def __init__(self, vault_path: Path | None, open_today, open_settings=None, parent=None):
         super().__init__(parent)
         self.vault_path, self.open_today = vault_path, open_today
+        self.open_settings = open_settings or (lambda: None)
         self.progress = {}
-        self.guide = QLabel(); self.guide.setWordWrap(True)
-        self.start = QPushButton("开始今日学习"); self.start.clicked.connect(open_today)
+        self.guide = QLabel()
+        self.guide.setWordWrap(True)
+        self.start = primary_button("开始今日学习")
+        self.start.clicked.connect(open_today)
+        self.header = PageHeader("首页", "今天想学什么，从这里开始")
+        self.header.add_action(self.start)
+        self.empty_state = EmptyState("尚未配置学习内容")
+        self.guide = self.empty_state.hint
+        self.settings_button = secondary_button("前往设置")
+        self.settings_button.clicked.connect(self.open_settings)
+        self.empty_state.layout().addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignCenter)
+        self.empty_state.hide()
         self.recent = QListWidget()
-        layout = QVBoxLayout(self); layout.addWidget(QLabel("首页")); layout.addWidget(self.guide)
-        layout.addWidget(self.start, 0, Qt.AlignmentFlag.AlignLeft)
-        box = QGroupBox("学习进度"); grid = QGridLayout(box)
+        self.recent.setSpacing(theme.SPACE[1])
+        self.recent.setMinimumHeight(120)
+        self.progress_card = Card()
+        self.progress_card.body.addWidget(SectionTitle("学习进度"))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(theme.SPACE[3])
+        grid.setVerticalSpacing(theme.SPACE[2])
         for row, subject in enumerate(("心理学", "经济学")):
-            bar = QProgressBar(); bar.setRange(0, 100); self.progress[subject] = bar
-            grid.addWidget(QLabel(subject), row, 0); grid.addWidget(bar, row, 1)
-        layout.addWidget(box); layout.addWidget(QLabel("最近完成")); layout.addWidget(self.recent, 1)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setTextVisible(False)
+            percentage = meta_label("0%")
+            percentage.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.progress[subject] = bar
+            grid.addWidget(QLabel(subject), row, 0)
+            grid.addWidget(bar, row, 1)
+            grid.addWidget(percentage, row, 2)
+            self.progress[f"{subject}_label"] = percentage
+        self.progress_card.body.addLayout(grid)
+        recent_card = Card()
+        recent_card.body.addWidget(SectionTitle("最近完成"))
+        self.recent_empty = EmptyState("还没有完成的知识点", "完成第一个知识点后，这里会出现你的学习记录")
+        recent_card.body.addWidget(self.recent_empty)
+        recent_card.body.addWidget(self.recent)
+        self.recent_empty.hide()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(theme.SPACE[3])
+        layout.addWidget(self.header)
+        layout.addWidget(self.empty_state)
+        layout.addWidget(self.progress_card)
+        layout.addWidget(recent_card, 1)
         self.refresh()
 
     def refresh(self) -> None:
         self.recent.clear()
         if self.vault_path is None or not self.vault_path.is_dir():
-            self.guide.setText("请先在设置中配置 Vault 路径。"); self.start.setEnabled(False)
-            for bar in self.progress.values(): bar.setValue(0)
+            self.guide.setText("请先在设置中配置 Vault 路径。")
+            self.empty_state.show()
+            self.start.setEnabled(False)
+            self.recent_empty.show()
+            self.recent.hide()
+            for subject in ("心理学", "经济学"):
+                self.progress[subject].setValue(0)
+                self.progress[f"{subject}_label"].setText("0%")
             return
-        self.guide.setText(""); self.start.setEnabled(True)
+        self.empty_state.hide()
+        self.start.setEnabled(True)
         try: records = scan_vault(self.vault_path)
         except (OSError, ValueError): records = []
-        for subject, bar in self.progress.items():
+        for subject in ("心理学", "经济学"):
+            bar = self.progress[subject]
             items = [r for r in records if r.subject == subject]
             done = sum(r.status is TopicStatus.COMPLETED for r in items)
-            bar.setValue(round(done * 100 / len(items)) if items else 0)
+            value = round(done * 100 / len(items)) if items else 0
+            bar.setValue(value)
+            self.progress[f"{subject}_label"].setText(f"{value}%")
         done = sorted((r for r in records if r.status is TopicStatus.COMPLETED), key=lambda r: (r.date, r.topic), reverse=True)
-        for r in done[:5]: self.recent.addItem(f"{r.date}  {r.topic}  [{r.subject}]")
-        if not done: self.recent.addItem("还没有完成的知识点。")
+        self.recent.clear()
+        for r in done[:5]:
+            row = QWidget()
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(theme.SPACE[2], theme.SPACE[1], theme.SPACE[2], theme.SPACE[1])
+            row_layout.setSpacing(theme.SPACE[0])
+            topic = QLabel(r.topic)
+            topic.setWordWrap(True)
+            metadata = QHBoxLayout()
+            metadata.addWidget(meta_label(r.date))
+            metadata.addStretch(1)
+            metadata.addWidget(meta_label(r.subject))
+            row_layout.addWidget(topic)
+            row_layout.addLayout(metadata)
+            item = QListWidgetItem()
+            item.setSizeHint(row.sizeHint())
+            self.recent.addItem(item)
+            self.recent.setItemWidget(item, row)
+        self.recent_empty.setVisible(not done)
+        self.recent.setVisible(bool(done))
 
 
 class _AIServiceAdapter:
@@ -133,12 +201,28 @@ class TodayPage(QWidget):
         self.subject = QComboBox(); self.subject.addItems(["心理学", "经济学"])
         self.fields = {key: QLabel() for key in ("topic", "module", "reason", "relationship", "question", "keywords", "schedule")}
         for w in self.fields.values(): w.setWordWrap(True)
-        self.start = QPushButton("开始学习"); self.start.clicked.connect(self.start_learning)
-        form = QFormLayout()
-        labels = {"topic":"主题", "module":"模块", "reason":"选择理由", "relationship":"与上个知识点", "question":"核心问题", "keywords":"搜索关键词", "schedule":"时间安排"}
-        for key, label in labels.items(): form.addRow(label, self.fields[key])
-        self.review_button = QPushButton("检查交流前版")
-        self.reference_button = QPushButton("生成 AI 参考版")
+        self.start = primary_button("开始学习"); self.start.clicked.connect(self.start_learning)
+        self.header = PageHeader("今日学习", "选择学科，查看今天的主题与学习安排")
+        self.header.add_action(self.subject)
+        self.header.add_action(self.start)
+        self.topic_card = Card()
+        for key, label in (("topic", "主题"), ("module", "模块")):
+            self.topic_card.body.addWidget(field_label(label))
+            self.fields[key].setObjectName("bodyText")
+            self.topic_card.body.addWidget(self.fields[key])
+        meta_grid = QGridLayout()
+        meta_grid.setHorizontalSpacing(theme.SPACE[4])
+        meta_grid.setVerticalSpacing(theme.SPACE[2])
+        labels = {"reason":"选择理由", "relationship":"与上个知识点", "question":"核心问题", "keywords":"搜索关键词", "schedule":"时间安排"}
+        for index, (key, label) in enumerate(labels.items()):
+            cell = QVBoxLayout()
+            cell.addWidget(field_label(label))
+            self.fields[key].setObjectName("bodyText")
+            cell.addWidget(self.fields[key])
+            meta_grid.addLayout(cell, index // 2, index % 2)
+        self.topic_card.body.addLayout(meta_grid)
+        self.review_button = primary_button("检查交流前版")
+        self.reference_button = secondary_button("生成 AI 参考版")
         self.review_button.clicked.connect(self.review_pre_learning)
         self.reference_button.clicked.connect(self.generate_reference)
         self.ai_status = QLabel()
@@ -146,9 +230,15 @@ class TodayPage(QWidget):
         self.ai_feedback = QTextEdit()
         self.ai_feedback.setReadOnly(True)
         self.ai_feedback.setPlaceholderText("AI 反馈会显示在这里，不会自动写入笔记")
-        layout = QVBoxLayout(self); layout.addWidget(QLabel("今日学习")); layout.addWidget(self.subject, 0, Qt.AlignmentFlag.AlignLeft); layout.addLayout(form); layout.addWidget(self.start, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(QLabel("AI 交流")); layout.addWidget(self.ai_status); layout.addWidget(self.ai_feedback, 1)
-        actions = QHBoxLayout(); actions.addWidget(self.review_button); actions.addWidget(self.reference_button); actions.addStretch(); layout.addLayout(actions)
+        set_reading_metrics(self.ai_feedback)
+        self.ai_card = Card()
+        self.ai_card.body.addWidget(SectionTitle("AI 交流"))
+        self.ai_card.body.addWidget(self.ai_status)
+        self.ai_card.body.addWidget(self.ai_feedback, 1)
+        actions = QHBoxLayout(); actions.addWidget(self.review_button); actions.addWidget(self.reference_button); actions.addStretch()
+        self.ai_card.body.addLayout(actions)
+        layout = QVBoxLayout(self); layout.setContentsMargins(24, 20, 24, 20); layout.setSpacing(theme.SPACE[3])
+        layout.addWidget(self.header); layout.addWidget(self.topic_card); layout.addWidget(self.ai_card, 1)
         self.subject.currentTextChanged.connect(self.refresh); self.refresh()
 
     def refresh(self) -> None:
@@ -245,12 +335,16 @@ class MarkdownEditor(QWidget):
         self.tabs = QTabWidget(); self.editors = []; self.previews = []
         for name in VERSION_NAMES:
             edit, preview, stack, wrapper = QTextEdit(), QTextBrowser(), QStackedWidget(), QWidget()
+            set_reading_metrics(edit); set_reading_metrics(preview)
             stack.addWidget(edit); stack.addWidget(preview); mode = QComboBox(); mode.addItems(["编辑", "预览"]); mode.currentIndexChanged.connect(stack.setCurrentIndex)
             box = QVBoxLayout(wrapper); box.addWidget(mode, 0, Qt.AlignmentFlag.AlignRight); box.addWidget(stack, 1); self.tabs.addTab(wrapper, name)
             self.editors.append(edit); self.previews.append(preview); edit.textChanged.connect(lambda i=len(self.editors)-1: self._mark_dirty(i))
-        self.save_button = QPushButton("保存"); self.save_button.clicked.connect(self.save_current); self.auto_save = QComboBox(); self.auto_save.addItems(["自动保存：开", "自动保存：关"]); self.auto_save.currentIndexChanged.connect(self._set_timer); self.status = QLabel("未加载文件")
-        controls = QHBoxLayout(); controls.addWidget(self.save_button); controls.addWidget(self.auto_save); controls.addWidget(self.status, 1)
-        layout = QVBoxLayout(self); layout.addWidget(self.tabs); layout.addLayout(controls)
+        self.context = meta_label("尚未加载文件")
+        self.empty_state = EmptyState("未加载文件", "开始学习并打开知识点后，可在这里编辑三版笔记")
+        self.save_button = primary_button("保存"); self.save_button.clicked.connect(self.save_current); self.auto_save = QComboBox(); self.auto_save.addItems(["自动保存：开", "自动保存：关"]); self.auto_save.currentIndexChanged.connect(self._set_timer); self.status = meta_label("未加载文件")
+        controls = QHBoxLayout(); controls.addWidget(self.save_button); controls.addWidget(self.auto_save); controls.addStretch(1); controls.addWidget(self.status)
+        layout = QVBoxLayout(self); layout.setContentsMargins(24, 20, 24, 20); layout.setSpacing(theme.SPACE[2]); layout.addWidget(self.context); layout.addWidget(self.empty_state, 1); layout.addWidget(self.tabs, 1); layout.addLayout(controls)
+        self.tabs.hide()
         self.timer = QTimer(self); self.timer.timeout.connect(self.save_all); self._set_timer()
 
     def _set_timer(self) -> None:
@@ -260,6 +354,9 @@ class MarkdownEditor(QWidget):
     def load_topic(self, folder: Path) -> None:
         if self.is_dirty() and not self.confirm_discard(): return
         self.folder = Path(folder)
+        self.context.setText(self.folder.name)
+        self.empty_state.hide()
+        self.tabs.show()
         files = sorted(self.folder.glob("*.md"))
         by_prefix = {path.name[:2]: path for path in files}
         self.paths = [by_prefix.get(f"0{i}", self.folder / VERSION_NAMES[i - 1]) for i in range(1, 4)]
@@ -309,11 +406,22 @@ class SettingsPage(QWidget):
     config_changed = Signal(Path)
     def __init__(self, config: AppConfig, config_path: Path | None = None, parent=None):
         super().__init__(parent); self.config_path = config_path
-        self.path_edit = QLineEdit(str(config.vault_path) if str(config.vault_path) != "." else ""); browse = QPushButton("选择目录"); browse.clicked.connect(self.choose_vault)
+        self.path_edit = QLineEdit(str(config.vault_path) if str(config.vault_path) != "." else ""); browse = secondary_button("选择目录"); browse.clicked.connect(self.choose_vault)
         path_row = QHBoxLayout(); path_row.addWidget(self.path_edit); path_row.addWidget(browse)
-        self.provider = QComboBox(); self.provider.addItems(["mock", "openai", "anthropic"]); self.provider.setCurrentText(config.ai_provider); self.model = QLineEdit(config.model); self.api_key = QLineEdit(); self.api_key.setEchoMode(QLineEdit.EchoMode.Password); self.interval = QSpinBox(); self.interval.setRange(1, 86400); self.interval.setValue(config.auto_save_interval); self.save = QPushButton("保存设置"); self.test = QPushButton("测试连接"); self.message = QLabel()
-        form = QFormLayout(); form.addRow("Vault 路径", path_row); form.addRow("AI 服务商", self.provider); form.addRow("模型名", self.model); form.addRow("API 密钥", self.api_key); form.addRow("自动保存间隔（秒）", self.interval)
-        buttons = QHBoxLayout(); buttons.addWidget(self.save); buttons.addWidget(self.test); layout = QVBoxLayout(self); layout.addWidget(QLabel("设置")); layout.addLayout(form); layout.addLayout(buttons); layout.addWidget(self.message); layout.addStretch(); self.save.clicked.connect(self.save_settings); self.test.clicked.connect(lambda: self.message.setText("连接测试已完成。"))
+        self.provider = QComboBox(); self.provider.addItems(["mock", "openai", "anthropic"]); self.provider.setCurrentText(config.ai_provider); self.model = QLineEdit(config.model); self.api_key = QLineEdit(); self.api_key.setEchoMode(QLineEdit.EchoMode.Password); self.interval = QSpinBox(); self.interval.setRange(1, 86400); self.interval.setValue(config.auto_save_interval); self.save = primary_button("保存设置"); self.test = secondary_button("测试连接"); self.message = QLabel(); self.message.setWordWrap(True)
+        self.header = PageHeader("设置", "配置 Vault 路径与 AI 服务")
+        content = QWidget(); content.setMaximumWidth(620); content.setMinimumWidth(480)
+        content_layout = QVBoxLayout(content); content_layout.setContentsMargins(0, 0, 0, 0); content_layout.setSpacing(theme.SPACE[3])
+        vault_card = Card(); vault_card.body.addWidget(SectionTitle("学习内容")); vault_card.body.addWidget(field_label("Vault 路径")); vault_card.body.addLayout(path_row)
+        ai_card = Card(); ai_card.body.addWidget(SectionTitle("AI 服务"))
+        ai_form = QFormLayout(); ai_form.addRow("AI 服务商", self.provider); ai_form.addRow("模型名", self.model); ai_form.addRow("API 密钥", self.api_key); ai_card.body.addLayout(ai_form)
+        autosave_card = Card(); autosave_card.body.addWidget(SectionTitle("自动保存")); autosave_form = QFormLayout(); autosave_form.addRow("自动保存间隔（秒）", self.interval); autosave_card.body.addLayout(autosave_form)
+        content_layout.addWidget(vault_card); content_layout.addWidget(ai_card); content_layout.addWidget(autosave_card)
+        buttons = QHBoxLayout(); buttons.addStretch(1); buttons.addWidget(self.test); buttons.addWidget(self.save)
+        content_layout.addLayout(buttons); content_layout.addWidget(self.message)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QScrollArea.Shape.NoFrame); scroll.setWidget(content)
+        layout = QVBoxLayout(self); layout.setContentsMargins(24, 20, 24, 20); layout.addWidget(self.header); layout.addWidget(scroll, 1)
+        self.save.clicked.connect(self.save_settings); self.test.clicked.connect(lambda: self.message.setText("连接测试已完成。"))
 
     def choose_vault(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "选择 Vault 目录", self.path_edit.text())
@@ -325,15 +433,24 @@ class SettingsPage(QWidget):
             save_config(config, self.config_path)
             if self.api_key.text(): set_api_key(config.ai_provider, self.api_key.text())
             self.api_key.clear()
-        except Exception as error: self.message.setText(f"保存失败：{error}"); return
-        self.message.setText("设置已保存。"); self.config_changed.emit(config.vault_path)
+        except Exception as error:
+            self.message.setText(f"保存失败：{error}")
+            palette = self.message.palette()
+            palette.setColor(QPalette.ColorRole.WindowText, theme.DANGER)
+            self.message.setPalette(palette)
+            return
+        self.message.setText("设置已保存。")
+        palette = self.message.palette()
+        palette.setColor(QPalette.ColorRole.WindowText, theme.OK)
+        self.message.setPalette(palette)
+        self.config_changed.emit(config.vault_path)
 
 
 class ContentArea(QStackedWidget):
     def __init__(self, vault_path: Path | None = None, config_path: Path | None = None, parent=None):
         super().__init__(parent); self._index = {}; config = _safe_config(config_path)
         if vault_path is not None: config = AppConfig(vault_path, config.ai_provider, config.model, config.auto_save_interval)
-        root = config.vault_path if str(config.vault_path) else None; self.home = HomePage(root, lambda: self.show_key("today")); self.today = TodayPage(root, config_path); self.editor = MarkdownEditor(config); self.notes = NotesPage(root or Path(".")); self.map = MapPage(root or Path(".")); self.settings = SettingsPage(config, config_path)
+        root = config.vault_path if str(config.vault_path) else None; self.home = HomePage(root, lambda: self.show_key("today"), lambda: self.show_key("settings")); self.today = TodayPage(root, config_path); self.editor = MarkdownEditor(config); self.notes = NotesPage(root or Path(".")); self.map = MapPage(root or Path(".")); self.settings = SettingsPage(config, config_path)
         for key, page in (("home", self.home), ("today", self.today), ("notes", self.notes), ("map", self.map), ("settings", self.settings), ("editor", self.editor)): self._index[key] = self.addWidget(page)
         self.today.topic_ready.connect(self._open_topic); self.today.reference_ready.connect(self.editor.load_reference_file); self.settings.config_changed.connect(self._vault_changed)
     def _open_topic(self, folder: Path) -> None:
