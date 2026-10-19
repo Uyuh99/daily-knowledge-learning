@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QGridLayout, QGroupBox,
     QProgressBar, QSpinBox, QStackedWidget, QTabWidget, QTextBrowser, QTextEdit,
     QVBoxLayout, QWidget, QFileDialog)
 
+from .. import __version__
 from ..ai_provider import get_provider
 from ..config import AppConfig, load_config, save_config, set_api_key
 from ..file_writer import update_note
@@ -314,6 +315,8 @@ class SettingsPage(QWidget):
         self.provider = QComboBox(); self.provider.addItems(["mock", "openai", "anthropic"]); self.provider.setCurrentText(config.ai_provider); self.model = QLineEdit(config.model); self.api_key = QLineEdit(); self.api_key.setEchoMode(QLineEdit.EchoMode.Password); self.interval = QSpinBox(); self.interval.setRange(1, 86400); self.interval.setValue(config.auto_save_interval); self.save = QPushButton("保存设置"); self.test = QPushButton("测试连接"); self.message = QLabel()
         form = QFormLayout(); form.addRow("Vault 路径", path_row); form.addRow("AI 服务商", self.provider); form.addRow("模型名", self.model); form.addRow("API 密钥", self.api_key); form.addRow("自动保存间隔（秒）", self.interval)
         buttons = QHBoxLayout(); buttons.addWidget(self.save); buttons.addWidget(self.test); layout = QVBoxLayout(self); layout.addWidget(QLabel("设置")); layout.addLayout(form); layout.addLayout(buttons); layout.addWidget(self.message); layout.addStretch(); self.save.clicked.connect(self.save_settings); self.test.clicked.connect(lambda: self.message.setText("连接测试已完成。"))
+
+        self.layout().insertWidget(4, QLabel(f"版本 v{__version__}"))
 
     def choose_vault(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "选择 Vault 目录", self.path_edit.text())

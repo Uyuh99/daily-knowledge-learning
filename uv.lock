@@ -249,11 +249,10 @@ wheels = [
 
 [[package]]
 name = "daily-knowledge-learning"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },
-    { name = "pyinstaller" },
     { name = "pyside6" },
     { name = "requests" },
     { name = "ruamel-yaml" },
@@ -268,7 +267,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "keyring", specifier = ">=25.6" },
-    { name = "pyinstaller", specifier = ">=6.22" },
     { name = "pyside6", specifier = ">=6.8" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "ruamel-yaml", specifier = ">=0.18.10" },

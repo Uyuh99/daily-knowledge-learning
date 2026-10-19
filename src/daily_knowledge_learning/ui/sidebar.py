@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QSizePolicy, QVBoxLayout, QWidget
+from .. import __version__
 
 @dataclass(frozen=True)
 class NavEntry:
@@ -24,7 +25,7 @@ class Sidebar(QWidget):
         self._list = QListWidget(); self._list.setObjectName("sidebarList"); self._list.setFrameShape(QListWidget.Shape.NoFrame); self._list.setIconSize(QSize(0, 0))
         for entry in NAV_ENTRIES:
             item = QListWidgetItem(entry.title); item.setData(Qt.ItemDataRole.UserRole, entry.key); self._list.addItem(item)
-        self._list.currentRowChanged.connect(self._on_row_changed); layout.addWidget(self._list, 1); footer = QLabel("v0.1"); footer.setObjectName("sidebarFooter"); footer.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(footer); self._list.setCurrentRow(0)
+        self._list.currentRowChanged.connect(self._on_row_changed); layout.addWidget(self._list, 1); footer = QLabel(f"v{__version__}"); footer.setObjectName("sidebarFooter"); footer.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(footer); self._list.setCurrentRow(0)
     def current_key(self) -> str:
         item = self._list.currentItem(); return str(item.data(Qt.ItemDataRole.UserRole)) if item else "home"
     def select(self, key: str) -> None:
