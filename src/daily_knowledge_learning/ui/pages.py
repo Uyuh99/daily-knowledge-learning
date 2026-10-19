@@ -20,6 +20,7 @@ from ..topic_selector import build_study_prompt, select_next_topic
 from ..vault_scan import scan_vault
 from .map_page import MapPage
 from .notes_page import NotesPage
+from .archive_dialog import ArchiveDialog
 
 VERSION_NAMES = ("01-交流前版.md", "02-交流后版.md", "03-AI参考版.md")
 
@@ -124,12 +125,15 @@ class TodayPage(QWidget):
     topic_ready = Signal(Path)
     reference_ready = Signal(Path)
     ai_completed = Signal(str, bool)
+    archive_completed = Signal()
 
     def __init__(self, vault_path: Path | None, config_path: Path | None = None, parent=None):
         super().__init__(parent); self.vault_path = vault_path; self.config_path = config_path
         self._thread_pool = QThreadPool(self)
         self._workers = set()
         self._generated_references = set()
+        self.archive_button = QPushButton("完成学习")
+        self.archive_button.clicked.connect(self.archive_learning)
         self.session = None
         self.subject = QComboBox(); self.subject.addItems(["心理学", "经济学"])
         self.fields = {key: QLabel() for key in ("topic", "module", "reason", "relationship", "question", "keywords", "schedule")}
@@ -150,6 +154,7 @@ class TodayPage(QWidget):
         layout = QVBoxLayout(self); layout.addWidget(QLabel("今日学习")); layout.addWidget(self.subject, 0, Qt.AlignmentFlag.AlignLeft); layout.addLayout(form); layout.addWidget(self.start, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(QLabel("AI 交流")); layout.addWidget(self.ai_status); layout.addWidget(self.ai_feedback, 1)
         actions = QHBoxLayout(); actions.addWidget(self.review_button); actions.addWidget(self.reference_button); actions.addStretch(); layout.addLayout(actions)
+        layout.addWidget(self.archive_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.subject.currentTextChanged.connect(self.refresh); self.refresh()
 
     def refresh(self) -> None:
@@ -237,6 +242,23 @@ class TodayPage(QWidget):
             lambda session, provider: generate_ai_reference(session, provider, user_confirmed=True),
             generated_reference=True,
         )
+
+    def archive_learning(self) -> None:
+        if self.vault_path is None or self.session is None:
+            self.ai_status.setText("请先开始学习并创建学习会话。")
+            return
+        config = _safe_config(self.config_path)
+        provider = get_provider(config.ai_provider, model=config.model or None)
+        dialog = ArchiveDialog(self, vault_path=self.vault_path, subject=self.session.subject,
+                               session=self.session, provider=provider)
+        dialog.archive_completed.connect(self._archive_finished)
+        dialog.exec()
+
+    @Slot()
+    def _archive_finished(self) -> None:
+        self.archive_button.setText("查看归档结果")
+        self.archive_button.setEnabled(False)
+        self.archive_completed.emit()
 
 
 class MarkdownEditor(QWidget):
@@ -339,11 +361,14 @@ class ContentArea(QStackedWidget):
         root = config.vault_path if str(config.vault_path) else None; self.home = HomePage(root, lambda: self.show_key("today")); self.today = TodayPage(root, config_path); self.editor = MarkdownEditor(config); self.notes = NotesPage(root or Path(".")); self.map = MapPage(root or Path(".")); self.settings = SettingsPage(config, config_path)
         for key, page in (("home", self.home), ("today", self.today), ("notes", self.notes), ("map", self.map), ("settings", self.settings), ("editor", self.editor)): self._index[key] = self.addWidget(page)
         self.today.topic_ready.connect(self._open_topic); self.today.reference_ready.connect(self.editor.load_reference_file); self.settings.config_changed.connect(self._vault_changed)
+        self.today.archive_completed.connect(self.refresh_all)
     def _open_topic(self, folder: Path) -> None:
         self.editor.load_topic(folder)
         self.show_key("editor")
     def _vault_changed(self, path: Path) -> None:
         self.home.vault_path = path; self.today.vault_path = path; self.editor.config = AppConfig(path, self.editor.config.ai_provider, self.editor.config.model, self.editor.config.auto_save_interval)
-        self.notes.vault_root = path; self.map.vault_root = path; self.home.refresh(); self.today.refresh(); self.notes.refresh(); self.map.refresh()
+        self.notes.vault_root = path; self.map.vault_root = path; self.refresh_all()
+    def refresh_all(self) -> None:
+        self.home.refresh(); self.today.refresh(); self.notes.refresh(); self.map.refresh()
     def show_key(self, key: str) -> None:
         if key in self._index: self.setCurrentIndex(self._index[key])

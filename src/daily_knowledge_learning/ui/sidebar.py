@@ -1,13 +1,28 @@
+"""Left navigation rail."""
+
 from __future__ import annotations
+
 from dataclasses import dataclass
+
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtWidgets import QLabel, QListWidget, QListWidgetItem, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
 from .. import __version__
+from . import theme
 
 @dataclass(frozen=True)
 class NavEntry:
     key: str
     title: str
+
 
 NAV_ENTRIES = (
     NavEntry("home", "首页"),
@@ -17,20 +32,75 @@ NAV_ENTRIES = (
     NavEntry("settings", "设置"),
 )
 
+# Entries shown in the primary group; the rest sit below a divider.
+_PRIMARY_KEYS = ("home", "today", "notes", "map")
+
+
 class Sidebar(QWidget):
+    """Brand, grouped navigation and a quiet footer."""
+
     entry_selected = Signal(str)
-    def __init__(self, parent=None):
-        super().__init__(parent); self.setObjectName("sidebar"); self.setFixedWidth(180); self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        layout = QVBoxLayout(self); layout.setContentsMargins(8, 12, 8, 12); layout.setSpacing(8); brand = QLabel("每日知识点学习"); brand.setObjectName("sidebarBrand"); brand.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(brand)
-        self._list = QListWidget(); self._list.setObjectName("sidebarList"); self._list.setFrameShape(QListWidget.Shape.NoFrame); self._list.setIconSize(QSize(0, 0))
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("sidebar")
+        self.setFixedWidth(theme.SIDEBAR_WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(theme.SPACE[1])
+
+        brand = QLabel("每日知识点学习")
+        brand.setObjectName("sidebarBrand")
+        layout.addWidget(brand)
+        caption = QLabel("每天一个心理学 · 经济学知识点")
+        caption.setObjectName("sidebarCaption")
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
+        layout.addSpacing(theme.SPACE[3])
+
+        self._list = QListWidget()
+        self._list.setObjectName("sidebarList")
+        self._list.setFrameShape(QFrame.Shape.NoFrame)
+        self._list.setIconSize(QSize(0, 0))
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        self._list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for entry in NAV_ENTRIES:
-            item = QListWidgetItem(entry.title); item.setData(Qt.ItemDataRole.UserRole, entry.key); self._list.addItem(item)
-        self._list.currentRowChanged.connect(self._on_row_changed); layout.addWidget(self._list, 1); footer = QLabel(f"v{__version__}"); footer.setObjectName("sidebarFooter"); footer.setAlignment(Qt.AlignmentFlag.AlignCenter); layout.addWidget(footer); self._list.setCurrentRow(0)
+            item = QListWidgetItem(entry.title)
+            item.setData(Qt.ItemDataRole.UserRole, entry.key)
+            item.setToolTip(entry.title)
+            item.setSizeHint(QSize(0, 36))
+            self._list.addItem(item)
+        # Size the rail to its rows so it never stretches a gap between groups.
+        self._list.setFixedHeight(self._list.count() * 38 + 8)
+        self._list.currentRowChanged.connect(self._on_row_changed)
+        layout.addWidget(self._list)
+        layout.addStretch(1)
+
+        footer = QLabel(f"v{__version__} · 仅本地读取与写入")
+        footer.setObjectName("sidebarCaption")
+        layout.addWidget(footer)
+        self.select("home")
     def current_key(self) -> str:
-        item = self._list.currentItem(); return str(item.data(Qt.ItemDataRole.UserRole)) if item else "home"
+        item = self._list.currentItem()
+        if item is None:
+            return "home"
+        return str(item.data(Qt.ItemDataRole.UserRole) or "home")
+
     def select(self, key: str) -> None:
         for row in range(self._list.count()):
-            if self._list.item(row).data(Qt.ItemDataRole.UserRole) == key: self._list.setCurrentRow(row); return
+            if self._list.item(row).data(Qt.ItemDataRole.UserRole) == key:
+                self._list.setCurrentRow(row)
+                return
+
     def _on_row_changed(self, row: int) -> None:
         item = self._list.item(row)
-        if item: self.entry_selected.emit(str(item.data(Qt.ItemDataRole.UserRole)))
+        if item is None:
+            return
+        key = item.data(Qt.ItemDataRole.UserRole)
+        if key:
+            self.entry_selected.emit(str(key))
