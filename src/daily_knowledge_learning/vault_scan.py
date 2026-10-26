@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from .models import TopicRecord, TopicStatus
+from .subjects import BUILTIN_SUBJECTS
 
 _DATE_TOPIC = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})-(?P<topic>.+?)(?:\.md)?$")
 _COMPLETED_VALUES = {"已完成", "已确认", "completed", "confirmed"}
@@ -49,38 +50,31 @@ def scan_subject(subject_root: Path, subject: str) -> list[TopicRecord]:
     single Markdown note is retained and reported as ``待学习`` until the
     user completes and confirms the three-version workflow.
     """
-    records_root = subject_root / "每日记录"
-    if not records_root.is_dir():
-        return []
-
     records: list[TopicRecord] = []
-    for entry in sorted(records_root.iterdir(), key=lambda item: item.name):
-        match = _DATE_TOPIC.match(entry.name)
-        if not match:
+    roots = [subject_root / "每日记录", subject_root]
+    seen: set[Path] = set()
+    for records_root in roots:
+        if not records_root.is_dir():
             continue
-        date = match.group("date")
-        topic = match.group("topic")
-        if entry.is_dir():
-            versions = tuple(
-                name
-                for name in ("01-交流前版.md", "02-交流后版.md", "03-AI参考版.md")
-                if (entry / name).exists()
-            )
-            status = _status_for_folder(entry, versions)
-            records.append(
-                TopicRecord(subject, topic, date, entry, status, True, versions)
-            )
-        elif entry.is_file() and entry.suffix.lower() == ".md":
-            records.append(
-                TopicRecord(
-                    subject,
-                    topic,
-                    date,
-                    entry,
-                    TopicStatus.TO_LEARN,
-                    False,
+        for entry in sorted(records_root.iterdir(), key=lambda item: item.name):
+            if entry in seen:
+                continue
+            seen.add(entry)
+            match = _DATE_TOPIC.match(entry.name)
+            if not match:
+                continue
+            date = match.group("date")
+            topic = match.group("topic")
+            if entry.is_dir():
+                versions = tuple(
+                    name
+                    for name in ("01-交流前版.md", "02-交流后版.md", "03-AI参考版.md")
+                    if (entry / name).exists()
                 )
-            )
+                status = _status_for_folder(entry, versions)
+                records.append(TopicRecord(subject, topic, date, entry, status, True, versions))
+            elif entry.is_file() and entry.suffix.lower() == ".md":
+                records.append(TopicRecord(subject, topic, date, entry, TopicStatus.TO_LEARN, False))
     return records
 
 
@@ -91,6 +85,7 @@ def scan_vault(vault_root: Path) -> list[TopicRecord]:
     if not project_root.is_dir():
         # This also makes small fixture Vaults useful in tests and exercises.
         project_root = vault_root
-    for subject in ("心理学", "经济学"):
-        records.extend(scan_subject(project_root / subject, subject))
+    subject_roots = [path for path in project_root.iterdir() if path.is_dir()] if project_root.is_dir() else []
+    for subject_root in sorted(subject_roots, key=lambda path: path.name):
+        records.extend(scan_subject(subject_root, subject_root.name))
     return records
