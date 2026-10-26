@@ -246,11 +246,11 @@ def test_get_provider_returns_mock() -> None:
 
 
 def test_get_provider_returns_openai() -> None:
-    assert isinstance(get_provider("openai", model="gpt-4o-mini"), OpenAIProvider)
+    assert isinstance(get_provider("openai", model="gpt-4o-mini", api_key="test-key"), OpenAIProvider)
 
 
 def test_get_provider_returns_anthropic() -> None:
-    assert isinstance(get_provider("anthropic"), AnthropicProvider)
+    assert isinstance(get_provider("anthropic", api_key="test-key"), AnthropicProvider)
 
 
 def test_get_provider_rejects_unknown() -> None:
